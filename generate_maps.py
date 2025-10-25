@@ -4,6 +4,8 @@ import os
 import re
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from rich import print
+
 
 # --- 1. 定数とファイル名設定 ---
 OUTPUT_DIR = 'sfc_kappa_maps'

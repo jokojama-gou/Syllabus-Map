@@ -4,16 +4,35 @@ import os
 import re
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from rich import print
+import math 
+
 
 # --- 1. 定数とファイル名設定 ---
 OUTPUT_DIR = 'sfc_kappa_maps'
 
 # 描画設定
-FILL_COLOR = (83, 83, 83, 150)  # 薄い黄色 (RGBA: 半透明)
-TEXT_COLOR = (0, 1258, 255)         # 黒
-FONT_SIZE = 20                 # 初期フォントサイズ (要調整)
+FILL_COLOR = (83, 83, 83, 150)  # 教室の塗りつぶし色
+TEXT_COLOR = (0,1258, 255  )        # 教室名の文字色 (黒に変更)
+FONT_SIZE = 20                  # 教室名のフォントサイズ
 
-# --- 2. 日本語フォント探索ロジック (前回と同じ) ---
+CUSTOM_STRING = "Yokoyama Go" 
+
+WATERMARK_FONT_SIZE = 16    # 透かしのフォントサイズ
+WATERMARK_ANGLE = -45         # 透かしの角度 (右肩上がり)
+WATERMARK_COLOR = (120, 120, 120, 80) # 透かしの色 (グレー, 31%の透明度)
+WATERMARK_SPACING_ZENKAKU = 15  # 透かし文字間のスペース（全角文字数）
+WATERMARK_LINE_SPACING = 6 # 透かし文字の縦のスペーシング
+
+# 曜日変換マップ
+DAY_JP_TO_EN = {
+    "月": "Mon", "火": "Tue", "水": "Wed", "木": "Thu", 
+    "金": "Fri", "土": "Sat", "日": "Sun", "他": "etc"
+}
+
+
+
+# --- 2. 日本語フォント探索ロジック ---
 def find_japanese_font():
     """
     Windows環境で一般的に利用可能な日本語フォントを探してパスとインデックスを返す
@@ -39,65 +58,47 @@ def find_japanese_font():
 GLOBAL_FONT_PATH, GLOBAL_FONT_INDEX = find_japanese_font()
 
 
-# --- 3. データ前処理関数 (この関数を修正) ---
-
+# --- 3. データ前処理関数 ---
 def preprocess_syllabus_data(df):
     """
     シラバスデータを「1行 = 1科目/1教室/1時限」の形式に分解・正規化する。
-    連番時限 (例: 火2,3) を個別の時限 (火2, 火3) に分解する。
     """
     records = []
-    # 欠損値を持つ行は除外
     df = df.dropna(subset=['教室', '曜日時限']).copy()
 
     for _, row in df.iterrows():
         
-        # --- (A) 曜日時限を個別の時限コードに分解 ---
+        # (A) 曜日時限を個別の時限コードに分解
         normalized_time_slots = []
-        # まず '/' で分割 (例: '火2,3/水4' -> ['火2,3', '水4'])
         time_groups = [g.strip() for g in row['曜日時限'].split('/')]
         
         for group in time_groups:
-            # 正規表現で曜日と時限番号を抽出 (例: '火2,3' -> ('火', '2,3'))
             match = re.match(r'([月火水木金土日他])(\d+(,\d+)*)', group)
             
             if match:
-                day = match.group(1) # 曜日
-                periods_str = match.group(2) # 時限連番 (例: '2,3' または '4')
-                
-                # 時限連番を ',' で分割 (例: '2,3' -> ['2', '3'])
+                day = match.group(1) 
+                periods_str = match.group(2) 
                 periods = [p.strip() for p in periods_str.split(',')]
                 
                 for period in periods:
-                    # 個別時限コードを生成 (例: '火2', '火3')
                     normalized_time_slots.append(f"{day}{period}")
         
-        # --- (B) 教室情報のパースと結合 ---
-
-        # 教室コードと時限の複合表記を抽出 (例: '火2:ο15, 水2:ι22')
+        # (B) 教室情報のパースと結合
         matches = re.findall(r'(\S+):(\S+)', row['教室'])
-        # 複合表記内の時限コードをキーとする辞書を作成 (例: {'火2': 'ο15'})
         room_time_pairs = {time_code: room_code for room_code, time_code in matches} 
 
-        # 時限の正規化リスト (normalized_time_slots) を使用してレコードを作成
         for ts in normalized_time_slots:
             room = None
             
-            # 1. 複合表記から探す
             if ts in room_time_pairs:
                 room = room_time_pairs[ts]
             else:
-                # 2. 単一教室コードのみが列挙されている場合
-                # ':''を含まない教室コードを抽出 (例: ['κ17'])
                 simple_rooms = [r.strip() for r in row['教室'].split(',') if ':' not in r]
                 
-                # 単一の教室コードのみがリストにある場合、その科目の全ての時限に使用すると仮定
                 if len(simple_rooms) == 1:
                     room = simple_rooms[0] 
-                
-                # その他の複雑なケース (複数教室・複数時限で対応が不明など) はスキップ (MVPスコープ外)
 
-            if room and room.strip(): # 教室コードが存在し、空でないことを確認
+            if room and room.strip(): 
                 records.append({
                     '科目名': row['科目名'],
                     '担当者名': row['担当者名'],
@@ -107,7 +108,8 @@ def preprocess_syllabus_data(df):
 
     return pd.DataFrame(records)
 
-# --- 4. ファイル選択ダイアログ関数 (前回と同じ) ---
+
+# --- 4. ファイル選択ダイアログ関数 ---
 def select_file(title, filetypes):
     root = tk.Tk()
     root.withdraw() 
@@ -124,10 +126,77 @@ def select_file(title, filetypes):
         
     return file_path
 
-# --- 5. メイン処理 (前回と同じロジックで実行) ---
 
+# ### ▼ 透かし機能追加 ▼ ###
+# --- 4.5. 透かしレイヤー生成関数 ---
+def create_watermark_layer(width, height, text_to_draw, font, color, angle, spacing_text):
+    """
+    指定されたテキストで埋め尽くされ、回転された透かしレイヤー（透明画像）を作成する
+    """
+    
+    # 1. 回転しても全体を覆えるよう、対角線より大きいサイズの透明レイヤーを作成
+    diagonal = int(math.sqrt(width**2 + height**2))
+    # 余裕を持たせる
+    large_size = int(diagonal * 1.5) 
+    
+    watermark_layer = Image.new('RGBA', (large_size, large_size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(watermark_layer)
+
+    # 2. テキストをグリッド状に敷き詰める
+    
+    # 1行のテキストを作成 (画面幅より十分長く)
+    bbox = draw.textbbox((0, 0), text_to_draw + spacing_text, font=font)
+    single_text_width = bbox[2] - bbox[0]
+    single_text_height = (bbox[3] - bbox[1]) * WATERMARK_LINE_SPACING # 行間のおおきさ
+    
+    # 横方向に必要な繰り返し回数
+    repeat_count = int(large_size / single_text_width) + 2
+    full_text_line = (text_to_draw + spacing_text) * repeat_count
+    
+    # 縦方向に敷き詰める
+    for y in range(0, large_size, int(single_text_height)):
+        # 奇数行と偶数行で開始位置をずらす
+        x_offset = (y // int(single_text_height)) % 2 * int(single_text_width / 2)
+        draw.text((-x_offset, y), full_text_line, font=font, fill=color)
+
+    # 3. レイヤーを回転させる
+    rotated_layer = watermark_layer.rotate(angle, resample=Image.BICUBIC)
+    
+    
+    # ### ▼▼▼ このブロックを差し替え ▼▼▼ ###
+    
+    # 4. 元の画像サイズ (width, height) に合わせて中央から切り出す
+    
+    # 回転後の画像中心
+    rotated_center_x = rotated_layer.width / 2
+    rotated_center_y = rotated_layer.height / 2
+    
+    # 切り出す領域の計算 (整数に丸める)
+    # まず左上 (left, top) を決める
+    left = int(rotated_center_x - width / 2)
+    top = int(rotated_center_y - height / 2)
+    
+    # サイズが (width, height) になるように右下 (right, bottom) を計算
+    # これにより、浮動小数点の丸め誤差を防ぐ
+    right = left + width
+    bottom = top + height
+    
+    # cropメソッドには整数のタプルを渡す
+    final_watermark = rotated_layer.crop((left, top, right, bottom))
+    
+    # ### ▲▲▲ 差し替えここまで ▲▲▲ ###
+
+
+    # 最終確認 (万が一サイズが違ったらリサイズする)
+    if final_watermark.size != (width, height):
+        print(f"警告: 透かしの切り出しサイズが一致しませんでした。強制リサイズします。 Base:({width}, {height}), WM:{final_watermark.size}")
+        final_watermark = final_watermark.resize((width, height), Image.LANCZOS)
+
+    return final_watermark
+
+# --- 5. メイン処理 ---
 if __name__ == '__main__':
-    print("SFC授業教室マップ生成スクリプト (κ棟MVP - 連番時限対応版) を開始します。")
+    print("SFC授業教室マップ生成スクリプト (κ棟MVP - 透かし対応版) を開始します。")
     
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
@@ -146,7 +215,6 @@ if __name__ == '__main__':
         print(f"データの読み込み中にエラーが発生しました: {e}")
         exit()
     
-    # 座標データの整形
     location_df = location_df.rename(columns={
         'classroom_name': '教室コード', 'beginning_x': 'x_min', 'beginning_y': 'y_min', 'end_x': 'x_max', 'end_y': 'y_max'
     })
@@ -158,11 +226,8 @@ if __name__ == '__main__':
     
     print("データのパース（分解）処理中...")
     processed_syllabus_df = preprocess_syllabus_data(syllabus_df)
-    kappa_syllabus_df = processed_syllabus_df[
-        processed_syllabus_df['教室コード'].str.startswith('κ', na=False)
-    ]
-    all_time_slots = kappa_syllabus_df['曜日時限'].unique()
-    
+    processed_syllabus_df_syllabus_df = processed_syllabus_df.copy()
+    all_time_slots = processed_syllabus_df_syllabus_df['曜日時限'].unique()    
     if len(all_time_slots) == 0:
         print("エラー: κ棟の授業が見つかりませんでした。")
         exit()
@@ -170,7 +235,7 @@ if __name__ == '__main__':
     print(f"検出されたユニークな時限: {len(all_time_slots)}件")
     print("-" * 30)
 
-    # 5-3. フォントの準備
+    # 5-3. フォントと画像の準備
     try:
         initial_base_img = Image.open(base_image_path).convert("RGBA")
     except Exception as e:
@@ -178,13 +243,17 @@ if __name__ == '__main__':
         exit()
     
     font = ImageFont.load_default()
+    watermark_font = ImageFont.load_default() # ### ▼ 透かし機能追加 ▼ ###
+
     if GLOBAL_FONT_PATH:
         try:
             if GLOBAL_FONT_INDEX is not None:
                 font = ImageFont.truetype(GLOBAL_FONT_PATH, FONT_SIZE, index=GLOBAL_FONT_INDEX)
+                watermark_font = ImageFont.truetype(GLOBAL_FONT_PATH, WATERMARK_FONT_SIZE, index=GLOBAL_FONT_INDEX) # ### ▼ 透かし機能追加 ▼ ###
                 print(f"日本語フォント: {os.path.basename(GLOBAL_FONT_PATH)} (Index: {GLOBAL_FONT_INDEX}) を使用します。")
             else:
                 font = ImageFont.truetype(GLOBAL_FONT_PATH, FONT_SIZE)
+                watermark_font = ImageFont.truetype(GLOBAL_FONT_PATH, WATERMARK_FONT_SIZE) # ### ▼ 透かし機能追加 ▼ ###
                 print(f"日本語フォント: {os.path.basename(GLOBAL_FONT_PATH)} を使用します。")
                 
         except IOError:
@@ -192,11 +261,16 @@ if __name__ == '__main__':
     else:
         print(" -> 警告: Windows標準の日本語フォントが見つかりませんでした。デフォルトフォントを使用するため、文字化けする可能性があります。")
 
+    # ### ▼ 透かし機能追加 ▼ ###
+    # 透かし用の固定スペース
+    spacing_text = "　" * WATERMARK_SPACING_ZENKAKU
+    # ### ▲ 透かし機能追加 ▲ ###
+
     # 5-4. 全時限のループと描画
     for time_slot in sorted(all_time_slots):
         print(f"処理中: {time_slot}")
 
-        current_schedule = kappa_syllabus_df[kappa_syllabus_df['曜日時限'] == time_slot]
+        current_schedule = processed_syllabus_df_syllabus_df[processed_syllabus_df_syllabus_df['曜日時限'] == time_slot]
         merged_df = pd.merge(current_schedule, location_df, on='教室コード', how='inner')
 
         if merged_df.empty:
@@ -204,7 +278,36 @@ if __name__ == '__main__':
             continue
 
         try:
+            # 1. 元の地図をコピー
             base_img = initial_base_img.copy()
+            
+            # ### ▼ 透かし機能追加 ▼ ###
+            # 2. 透かしレイヤーを描画
+            
+            # time_slot (例: "火2") を "tue 2" に変換
+            day_jp = time_slot[0]
+            period = time_slot[1:]
+            day_en = DAY_JP_TO_EN.get(day_jp, day_jp) # マップにない場合はそのまま使用
+            en_time_slot = f"{day_en} {period}"
+            
+            # 比率 (2/3, 1/3) に合わせてテキストを生成
+            watermark_base_text = f"« {en_time_slot} »         {CUSTOM_STRING}          « {en_time_slot} »          "
+
+            # 透かしレイヤーを生成
+            watermark_layer = create_watermark_layer(
+                base_img.width, base_img.height,
+                watermark_base_text,
+                watermark_font,
+                WATERMARK_COLOR,
+                WATERMARK_ANGLE,
+                spacing_text
+            )
+            
+            # 3. 元画像の上に透かしを合成 (alpha_composite)
+            base_img = Image.alpha_composite(base_img, watermark_layer)
+
+            # 4. 合成後の画像に、教室の塗りつぶしとテキストを描画
+            #    (これにより、透かしの上に教室情報が乗る)
             draw = ImageDraw.Draw(base_img)
             
             for _, row in merged_df.iterrows():
@@ -227,9 +330,10 @@ if __name__ == '__main__':
                 
                 draw.text((text_x, text_y), text, fill=TEXT_COLOR, font=font)
 
-            # 画像の保存
+            # 5. 画像の保存
             output_filename = os.path.join(OUTPUT_DIR, f"map_{time_slot.replace('/', '_')}.png")
-            base_img.save(output_filename)
+            # RGBAからRGBに変換して保存 (PNGだが透明度を統合)
+            base_img.convert('RGB').save(output_filename)
             print(f" -> {output_filename} を生成しました。")
 
         except Exception as e:

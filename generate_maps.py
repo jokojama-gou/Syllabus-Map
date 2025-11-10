@@ -5,7 +5,10 @@ import re
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from rich import print
-import math 
+import math
+# --- 変更箇所 1: ライブラリの追加 ---
+from svgpathtools import svg2paths # SVG解析ライブラリ
+import numpy as np # 数値計算用
 
 
 # --- 1. 定数とファイル名設定 ---
@@ -13,15 +16,15 @@ OUTPUT_DIR = 'sfc_kappa_maps'
 
 # 描画設定
 FILL_COLOR = (83, 83, 83, 150)  # 教室の塗りつぶし色
-TEXT_COLOR = (0,1258, 255  )        # 教室名の文字色 (黒に変更)
-FONT_SIZE = 20                  # 教室名のフォントサイズ
+TEXT_COLOR = (0, 0, 0)         # 教室名の文字色 (黒)
+FONT_SIZE = 20                 # 教室名のフォントサイズ
 
 CUSTOM_STRING = "Yokoyama Go" 
 
-WATERMARK_FONT_SIZE = 16    # 透かしのフォントサイズ
-WATERMARK_ANGLE = -45         # 透かしの角度 (右肩上がり)
+WATERMARK_FONT_SIZE = 16       # 透かしのフォントサイズ
+WATERMARK_ANGLE = -45          # 透かしの角度 (右肩上がり)
 WATERMARK_COLOR = (120, 120, 120, 80) # 透かしの色 (グレー, 31%の透明度)
-WATERMARK_SPACING_ZENKAKU = 15  # 透かし文字間のスペース（全角文字数）
+WATERMARK_SPACING_ZENKAKU = 15 # 透かし文字間のスペース（全角文字数）
 WATERMARK_LINE_SPACING = 6 # 透かし文字の縦のスペーシング
 
 # 曜日変換マップ
@@ -31,7 +34,44 @@ DAY_JP_TO_EN = {
 }
 
 
+import re
 
+def normalize_room_code(code):
+
+    #教室コードを結合用に正規化する。
+   # ギリシャ文字を英字に変換し、小文字化、スペース削除を行う。
+    #例: "κ23" -> "kappa23", "Kappa 23" -> "kappa23", "K23" -> "kappa23"
+
+    if not isinstance(code, str):
+        return ""
+    
+    greek_to_latin = {
+        'α': 'alpha', 'β': 'beta', 'γ': 'gamma', 'δ': 'delta',
+        'ε': 'epsilon', 'ζ': 'zeta', 'η': 'eta', 'θ': 'theta',
+        'ι': 'iota', 'κ': 'kappa', 'λ': 'lambda', 'μ': 'mu',
+        'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron', 'π': 'pi',
+        'ρ': 'rho', 'σ': 'sigma', 'τ': 'tau', 'υ': 'upsilon',
+        'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
+        
+        # 大文字のギリシャ文字の追加
+        'Α': 'alpha', 'Β': 'beta', 'Γ': 'gamma', 'Δ': 'delta',
+        'Ε': 'epsilon', 'Ζ': 'zeta', 'Η': 'eta', 'Θ': 'theta',
+        'Ι': 'iota', 'Κ': 'kappa', 'Λ': 'lambda', 'Μ': 'mu',
+        'Ν': 'nu', 'Ξ': 'xi', 'Ο': 'omicron', 'Π': 'pi',
+        'Ρ': 'rho', 'Σ': 'sigma', 'Τ': 'tau', 'Υ': 'upsilon',
+        'Φ': 'phi', 'Χ': 'chi', 'Ψ': 'psi', 'Ω': 'omega'
+    }
+    
+    # 最初に小文字化の処理があるので、これは少し冗長になりますが、
+    # 処理順序を変更せず元の構造を保つために、このマッピング拡張が最も安全です。
+    code = code.lower() 
+                        
+    for greek, latin in greek_to_latin.items():
+        code = code.replace(greek, latin)
+        
+    code = re.sub(r'[\s\-_]', '', code)
+    
+    return code
 # --- 2. 日本語フォント探索ロジック ---
 def find_japanese_font():
     """
@@ -106,7 +146,13 @@ def preprocess_syllabus_data(df):
                     '曜日時限': ts,
                 })
 
-    return pd.DataFrame(records)
+    df_result = pd.DataFrame(records)
+    
+    # DataFrameが空でない場合 *のみ* 、正規化カラムを追加する
+    if not df_result.empty:
+        df_result['normalize_code'] = df_result['教室コード'].apply(normalize_room_code)
+
+    return df_result
 
 
 # --- 4. ファイル選択ダイアログ関数 ---
@@ -126,8 +172,66 @@ def select_file(title, filetypes):
         
     return file_path
 
+# SVG解析ロジック
+def extract_room_coordinates_from_svg(svg_file_path):
+    """
+    SVGファイルからパス情報（教室コードと外接矩形座標）を抽出し、DataFrameとして返す。
+    GIMPで作成した円形・多角形の教室にも対応する。
+    """
+    try:
+        # svg2pathsでSVGを解析。pathsはPathオブジェクトのリスト、attributesは属性のリスト
+        paths, attributes = svg2paths(svg_file_path)
+    except Exception as e:
+        print(f"致命的エラー: SVGファイルの解析に失敗しました。ファイル形式またはライブラリの問題です: {e}")
+        return pd.DataFrame()
 
-# ### ▼ 透かし機能追加 ▼ ###
+    records = []
+    
+    for path, attr in zip(paths, attributes):
+        # 教室コードはパスのIDとしてGIMPで設定されている
+        classroom_name = attr.get('id')
+        
+        # IDがないパス（装飾など）はスキップ
+        if not classroom_name or not classroom_name.strip():
+            continue
+
+        # 外接矩形 (Bounding Box) を計算
+        # path.bbox()は (xmin, xmax, ymin, ymax) を返す
+        try:
+            xmin, xmax, ymin, ymax = path.bbox() 
+        except Exception as e:
+            print(f"警告: パスID '{classroom_name}' の外接矩形計算中にエラーが発生しました: {e}。このパスはスキップされます。")
+            continue
+
+        # データを整数に丸める（ピクセル座標として利用するため）
+        records.append({
+            '教室コード': classroom_name,
+            # X/Yの最小値・最大値を保持（CSV形式に合わせる）
+            'x_min_raw': xmin,
+            'y_min_raw': ymin, 
+            'x_max_raw': xmax,
+            'y_max_raw': ymax,
+        })
+
+    if not records:
+        print("致命的エラー: SVGファイルから有効な教室座標データ（ID付きパス）が見つかりませんでした。")
+        return pd.DataFrame()
+
+    # DataFrameに変換し、整数座標を計算
+    df = pd.DataFrame(records)
+    df['x_start'] = np.floor(df['x_min_raw']).astype(int)
+    df['y_start'] = np.floor(df['y_min_raw']).astype(int) 
+    df['x_end'] = np.ceil(df['x_max_raw']).astype(int)
+    df['y_end'] = np.ceil(df['y_max_raw']).astype(int)
+    
+    df['normalize_code'] = df['教室コード'].apply(normalize_room_code)
+    
+    # 元の生の座標列は削除
+    df = df.drop(columns=['x_min_raw', 'y_min_raw', 'x_max_raw', 'y_max_raw'])
+
+    return df
+
+
 # --- 4.5. 透かしレイヤー生成関数 ---
 def create_watermark_layer(width, height, text_to_draw, font, color, angle, spacing_text):
     """
@@ -163,7 +267,6 @@ def create_watermark_layer(width, height, text_to_draw, font, color, angle, spac
     rotated_layer = watermark_layer.rotate(angle, resample=Image.BICUBIC)
     
     
-    # ### ▼▼▼ このブロックを差し替え ▼▼▼ ###
     
     # 4. 元の画像サイズ (width, height) に合わせて中央から切り出す
     
@@ -183,8 +286,7 @@ def create_watermark_layer(width, height, text_to_draw, font, color, angle, spac
     
     # cropメソッドには整数のタプルを渡す
     final_watermark = rotated_layer.crop((left, top, right, bottom))
-    
-    # ### ▲▲▲ 差し替えここまで ▲▲▲ ###
+
 
 
     # 最終確認 (万が一サイズが違ったらリサイズする)
@@ -196,8 +298,19 @@ def create_watermark_layer(width, height, text_to_draw, font, color, angle, spac
 
 # --- 5. メイン処理 ---
 if __name__ == '__main__':
-    print("SFC授業教室マップ生成スクリプト (κ棟MVP - 透かし対応版) を開始します。")
+    print("SFC授業教室マップ生成スクリプト (κ棟MVP - SVG対応版) を開始します。")
     
+    # --- 重要: 依存ライブラリの確認 ---
+    try:
+        import svgpathtools
+    except ImportError:
+        print("\n[red]エラー:[/red] 'svgpathtools' ライブラリが見つかりません。")
+        print("コマンドプロンプトで以下を実行してください:")
+        print("  [yellow]pip install svgpathtools[/yellow]")
+        exit()
+    # --- 依存ライブラリの確認終わり ---
+
+
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
 
@@ -205,30 +318,37 @@ if __name__ == '__main__':
     print("ファイル選択ダイアログが表示されます。")
     base_image_path = select_file("1/3. ベース地図画像を選択してください", [("Image files", "*.jpg *.jpeg *.png")])
     syllabus_file_path = select_file("2/3. 授業スケジュールCSVを選択してください", [("CSV files", "*.csv")])
-    location_file_path = select_file("3/3. 教室座標CSVを選択してください", [("CSV files", "*.csv")])
+    # --- 変更箇所 2: 教室座標ファイルタイプをSVGに変更 ---
+    location_file_path = select_file("3/3. 教室パスSVGを選択してください", [("SVG files", "*.svg")])
     
     # 5-2. データの読み込み・整形
     try:
         syllabus_df = pd.read_csv(syllabus_file_path)
-        location_df = pd.read_csv(location_file_path).dropna(subset=['beginning_x', 'beginning_y'])
+        # --- 変更箇所 3: SVG解析関数呼び出しに置き換え ---
+        location_df = extract_room_coordinates_from_svg(location_file_path)
+        
+        if location_df.empty:
+            print("[red]致命的エラー:[/red] SVG解析結果が空のため、プログラムを終了します。")
+            exit()
+            
     except Exception as e:
         print(f"データの読み込み中にエラーが発生しました: {e}")
         exit()
     
-    location_df = location_df.rename(columns={
-        'classroom_name': '教室コード', 'beginning_x': 'x_min', 'beginning_y': 'y_min', 'end_x': 'x_max', 'end_y': 'y_max'
-    })
-    location_df['x_start'] = location_df[['x_min', 'x_max']].min(axis=1).astype(int)
-    location_df['x_end'] = location_df[['x_min', 'x_max']].max(axis=1).astype(int)
-    location_df['y_start'] = location_df[['y_min', 'y_max']].min(axis=1).astype(int)
-    location_df['y_end'] = location_df[['y_min', 'y_max']].max(axis=1).astype(int)
-    location_df = location_df.drop(columns=['x_min', 'y_min', 'x_max', 'y_max'])
-    
     print("データのパース（分解）処理中...")
     processed_syllabus_df = preprocess_syllabus_data(syllabus_df)
-    processed_syllabus_df_syllabus_df = processed_syllabus_df.copy()
-    all_time_slots = processed_syllabus_df_syllabus_df['曜日時限'].unique()    
+
+    # --- ★修正★ DataFrameが空かどうかのチェックを先に行う ---
+    if processed_syllabus_df.empty:
+        print("[red]エラー:[/red] 処理対象の有効な授業データ（教室と時限が揃っているもの）が見つかりませんでした。")
+        print("シラバスCSVファイルの中身を確認してください。")
+        exit()
+
+    # DataFrameが空でないことが保証されたので、安全に列にアクセスできる
+    all_time_slots = processed_syllabus_df['曜日時限'].unique() 
+    
     if len(all_time_slots) == 0:
+        # このチェックは念のため残すが、通常は上の .empty でキャッチされる
         print("エラー: κ棟の授業が見つかりませんでした。")
         exit()
         
@@ -243,17 +363,17 @@ if __name__ == '__main__':
         exit()
     
     font = ImageFont.load_default()
-    watermark_font = ImageFont.load_default() # ### ▼ 透かし機能追加 ▼ ###
+    watermark_font = ImageFont.load_default() 
 
     if GLOBAL_FONT_PATH:
         try:
             if GLOBAL_FONT_INDEX is not None:
                 font = ImageFont.truetype(GLOBAL_FONT_PATH, FONT_SIZE, index=GLOBAL_FONT_INDEX)
-                watermark_font = ImageFont.truetype(GLOBAL_FONT_PATH, WATERMARK_FONT_SIZE, index=GLOBAL_FONT_INDEX) # ### ▼ 透かし機能追加 ▼ ###
+                watermark_font = ImageFont.truetype(GLOBAL_FONT_PATH, WATERMARK_FONT_SIZE, index=GLOBAL_FONT_INDEX) 
                 print(f"日本語フォント: {os.path.basename(GLOBAL_FONT_PATH)} (Index: {GLOBAL_FONT_INDEX}) を使用します。")
             else:
                 font = ImageFont.truetype(GLOBAL_FONT_PATH, FONT_SIZE)
-                watermark_font = ImageFont.truetype(GLOBAL_FONT_PATH, WATERMARK_FONT_SIZE) # ### ▼ 透かし機能追加 ▼ ###
+                watermark_font = ImageFont.truetype(GLOBAL_FONT_PATH, WATERMARK_FONT_SIZE) 
                 print(f"日本語フォント: {os.path.basename(GLOBAL_FONT_PATH)} を使用します。")
                 
         except IOError:
@@ -266,23 +386,26 @@ if __name__ == '__main__':
     spacing_text = "　" * WATERMARK_SPACING_ZENKAKU
     # ### ▲ 透かし機能追加 ▲ ###
 
-    # 5-4. 全時限のループと描画
+# 5-4. 全時限のループと描画
     for time_slot in sorted(all_time_slots):
         print(f"処理中: {time_slot}")
 
-        current_schedule = processed_syllabus_df_syllabus_df[processed_syllabus_df_syllabus_df['曜日時限'] == time_slot]
-        merged_df = pd.merge(current_schedule, location_df, on='教室コード', how='inner')
+        current_schedule = processed_syllabus_df[processed_syllabus_df['曜日時限'] == time_slot]
+ 
+        merged_df = pd.merge(current_schedule, location_df, on='normalize_code', how='inner') 
 
+        # merged_dfが空でも処理を続行し、透かしのみの「空のマップ」を生成する
         if merged_df.empty:
-            print(f" -> 警告: {time_slot} に κ棟の授業はありますが、座標データがありませんでした。スキップします。")
-            continue
+            # 警告メッセージを変更
+            print(f" -> 警告: {time_slot} に座標データがありません。透かしのみのマップを生成します。")
+        # 'continue' を削除し、処理を続行させる
+
 
         try:
             # 1. 元の地図をコピー
             base_img = initial_base_img.copy()
             
-            # ### ▼ 透かし機能追加 ▼ ###
-            # 2. 透かしレイヤーを描画
+            # 2. 透かしレイヤーを描画 (「火5」などの情報で)
             
             # time_slot (例: "火2") を "tue 2" に変換
             day_jp = time_slot[0]
@@ -291,7 +414,7 @@ if __name__ == '__main__':
             en_time_slot = f"{day_en} {period}"
             
             # 比率 (2/3, 1/3) に合わせてテキストを生成
-            watermark_base_text = f"« {en_time_slot} »         {CUSTOM_STRING}          « {en_time_slot} »          "
+            watermark_base_text = f"« {en_time_slot} »         {CUSTOM_STRING}         « {en_time_slot} »         "
 
             # 透かしレイヤーを生成
             watermark_layer = create_watermark_layer(
@@ -307,10 +430,11 @@ if __name__ == '__main__':
             base_img = Image.alpha_composite(base_img, watermark_layer)
 
             # 4. 合成後の画像に、教室の塗りつぶしとテキストを描画
-            #    (これにより、透かしの上に教室情報が乗る)
             draw = ImageDraw.Draw(base_img)
             
+            # ★merged_dfが空の場合、このforループは単に実行されないだけ
             for _, row in merged_df.iterrows():
+                # 座標が既にx_start, y_start, x_end, y_endとして計算されている
                 x_start, y_start, x_end, y_end = row['x_start'], row['y_start'], row['x_end'], row['y_end']
                 text = row['科目名']
                 
@@ -334,6 +458,8 @@ if __name__ == '__main__':
             output_filename = os.path.join(OUTPUT_DIR, f"map_{time_slot.replace('/', '_')}.png")
             # RGBAからRGBに変換して保存 (PNGだが透明度を統合)
             base_img.convert('RGB').save(output_filename)
+            
+            # merged_dfが空でも「生成しました」と表示される
             print(f" -> {output_filename} を生成しました。")
 
         except Exception as e:

@@ -432,7 +432,6 @@ if __name__ == '__main__':
             # 4. 合成後の画像に、教室の塗りつぶしとテキストを描画
             draw = ImageDraw.Draw(base_img)
             
-            # ★merged_dfが空の場合、このforループは単に実行されないだけ
             for _, row in merged_df.iterrows():
                 # 座標が既にx_start, y_start, x_end, y_endとして計算されている
                 x_start, y_start, x_end, y_end = row['x_start'], row['y_start'], row['x_end'], row['y_end']

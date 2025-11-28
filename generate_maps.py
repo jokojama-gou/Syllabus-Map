@@ -30,6 +30,11 @@ WATERMARK_ANGLE = -35         # 透かしの角度 (右肩上がり)
 WATERMARK_SPACING_ZENKAKU = 15 # 透かし文字間のスペース（全角文字数）
 WATERMARK_LINE_SPACING = 6 # 透かし文字の縦のスペーシング
 
+FILL_COLOR = (200, 200, 200, 80)   # 教室の塗りつぶし色
+# ★追加: 大きな透かしのフォントサイズ（画像の解像度に合わせて調整してください）
+BIG_WATERMARK_FONT_SIZE = 500
+BIG_WATERMARK_COLOR = (120,120,120,80)
+
 # 曜日変換マップ
 DAY_JP_TO_EN = {
     "月": "Mon", "火": "Tue", "水": "Wed", "木": "Thu", 
@@ -395,16 +400,19 @@ if __name__ == '__main__':
     
     font = ImageFont.load_default()
     watermark_font = ImageFont.load_default() 
+    big_watermark_font = ImageFont.load_default()
 
     if GLOBAL_FONT_PATH:
         try:
             if GLOBAL_FONT_INDEX is not None:
                 font = ImageFont.truetype(GLOBAL_FONT_PATH, FONT_SIZE, index=GLOBAL_FONT_INDEX)
                 watermark_font = ImageFont.truetype(GLOBAL_FONT_PATH, WATERMARK_FONT_SIZE, index=GLOBAL_FONT_INDEX) 
+                big_watermark_font = ImageFont.truetype(GLOBAL_FONT_PATH, BIG_WATERMARK_FONT_SIZE, index=GLOBAL_FONT_INDEX)
                 print(f"日本語フォント: {os.path.basename(GLOBAL_FONT_PATH)} (Index: {GLOBAL_FONT_INDEX}) を使用します。")
             else:
                 font = ImageFont.truetype(GLOBAL_FONT_PATH, FONT_SIZE)
                 watermark_font = ImageFont.truetype(GLOBAL_FONT_PATH, WATERMARK_FONT_SIZE) 
+                big_watermark_font = ImageFont.truetype(GLOBAL_FONT_PATH, BIG_WATERMARK_FONT_SIZE)
                 print(f"日本語フォント: {os.path.basename(GLOBAL_FONT_PATH)} を使用します。")
                 
         except IOError:
@@ -412,10 +420,8 @@ if __name__ == '__main__':
     else:
         print(" -> 警告: Windows標準の日本語フォントが見つかりませんでした。デフォルトフォントを使用するため、文字化けする可能性があります。")
 
-    # ### ▼ 透かし機能追加 ▼ ###
     # 透かし用の固定スペース
     spacing_text = "　" * WATERMARK_SPACING_ZENKAKU
-    # ### ▲ 透かし機能追加 ▲ ###
 
 # 5-4. 全時限のループと描画
     for time_slot in sorted(all_time_slots):
@@ -459,6 +465,27 @@ if __name__ == '__main__':
             
             # 3. 元画像の上に透かしを合成 (alpha_composite)
             base_img = Image.alpha_composite(base_img, watermark_layer)
+
+
+            # 新しい透明レイヤーを作成
+            big_wm_layer = Image.new("RGBA", base_img.size, (0, 0, 0, 0))
+            big_wm_draw = ImageDraw.Draw(big_wm_layer)
+            
+            # テキストの内容 (例: "月3")
+            big_text = time_slot 
+            
+            # テキストサイズを取得して中央配置
+            bbox = big_wm_draw.textbbox((0, 0), big_text, font=big_watermark_font)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+            x_pos = (base_img.width - text_w) / 2
+            y_pos = (base_img.height - text_h) / 2
+            
+            # 描画 (色は既存透かしと同じ WATERMARK_COLOR を使用)
+            big_wm_draw.text((x_pos, y_pos), big_text, font=big_watermark_font, fill=BIG_WATERMARK_COLOR)
+            
+            # ベース画像に合成 (塗りつぶしの下、背景透かしの上になる)
+            base_img = Image.alpha_composite(base_img, big_wm_layer)
 
             # 4. 合成後の画像に、教室の塗りつぶしとテキストを描画
             draw = ImageDraw.Draw(base_img)

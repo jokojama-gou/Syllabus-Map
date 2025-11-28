@@ -173,74 +173,90 @@ def select_file(title, filetypes):
 def extract_room_coordinates_from_svg(svg_file_path):
     """
     SVGファイルからパス情報（教室コードとパス形状）を抽出し、DataFrameとして返す。
-    ベジェ曲線を含むパスをポリゴン座標に変換して保存する。
+    セグメントごとに解析を行い、形状を忠実に再現する。
     """
     try:
-        # svg2pathsでSVGを解析。pathsはPathオブジェクトのリスト、attributesは属性のリスト
+        from svgpathtools import svg2paths, Line, CubicBezier, QuadraticBezier, Arc
+    except ImportError:
+        print("[red]エラー:[/red] svgpathtoolsが読み込めません。")
+        return pd.DataFrame()
+
+    try:
+        # SVG解析
         paths, attributes = svg2paths(svg_file_path)
     except Exception as e:
-        print(f"致命的エラー: SVGファイルの解析に失敗しました。ファイル形式またはライブラリの問題です: {e}")
+        print(f"致命的エラー: SVGファイルの解析に失敗しました: {e}")
         return pd.DataFrame()
 
     records = []
     
+    print(f"SVG解析開始: {len(paths)}個のパスが見つかりました。")
+
     for path, attr in zip(paths, attributes):
-        # 教室コードはパスのIDとしてGIMPで設定されている
+        # ID取得 (GIMP等で設定したレイヤー名/ID)
         classroom_name = attr.get('id')
         
-        # IDがないパス（装飾など）はスキップ
+        # IDがない、または空の場合はスキップ
         if not classroom_name or not classroom_name.strip():
             continue
 
-        # パスをポリゴン座標に変換（ベジェ曲線を線分近似）
-        # サンプリング数を増やすことで滑らかな曲線を再現
+        polygon_points = []
+
         try:
-            # パスの長さに応じてサンプル数を決定（最小50、最大500）
-            path_length = path.length()
-            num_samples = max(50, min(500, int(path_length / 2)))
+            # --- 修正箇所: パス全体ではなく、セグメントごとに点を抽出 ---
+            for segment in path:
+                # 直線の場合
+                if isinstance(segment, Line):
+                    # 始点のみ追加（終点は次のセグメントの始点になるため）
+                    polygon_points.append((segment.start.real, segment.start.imag))
+                
+                # ベジェ曲線や円弧の場合 (細かく分割して点を取る)
+                else:
+                    # 長さに応じて分割数を決定 (精度重視)
+                    seg_length = segment.length()
+                    # 短い線なら10分割、長いなら多めに。最低でも10点。
+                    num_samples = max(10, int(seg_length / 2)) 
+                    
+                    for i in range(num_samples):
+                        t = i / num_samples
+                        p = segment.point(t)
+                        polygon_points.append((p.real, p.imag))
             
-            # パスを均等にサンプリング
-            polygon_points = []
-            for i in range(num_samples + 1):
-                t = i / num_samples
-                point = path.point(t)
-                polygon_points.append((point.real, point.imag))
-            
-            # 外接矩形も計算（テキスト配置用）
+            # 最後の点を追加（パスを閉じる）
+            end_point = path[-1].end
+            polygon_points.append((end_point.real, end_point.imag))
+
+            # バウンディングボックス計算（文字配置用）
             xmin, xmax, ymin, ymax = path.bbox()
-            
+
         except Exception as e:
-            print(f"警告: パスID '{classroom_name}' の変換中にエラーが発生しました: {e}。このパスはスキップされます。")
+            print(f"警告: ID '{classroom_name}' の変換エラー: {e}")
             continue
 
-        # データを保存
+        # 座標変換（浮動小数点のまま保持、描画時にPILが処理してくれる）
+        # ただし、点数が少なすぎる(直線未満)場合は図形として成立しないので除外
+        if len(polygon_points) < 3:
+            continue
+
         records.append({
             '教室コード': classroom_name,
-            'polygon_points': polygon_points,  # ポリゴン座標リスト
-            'x_min_raw': xmin,
-            'y_min_raw': ymin, 
-            'x_max_raw': xmax,
-            'y_max_raw': ymax,
+            'polygon_points': polygon_points,
+            'x_start': int(xmin),
+            'y_start': int(ymin),
+            'x_end': int(xmax),
+            'y_end': int(ymax),
         })
 
     if not records:
-        print("致命的エラー: SVGファイルから有効な教室座標データ（ID付きパス）が見つかりませんでした。")
+        print("警告: 有効なIDを持つパスが見つかりませんでした。SVGのID設定を確認してください。")
         return pd.DataFrame()
 
-    # DataFrameに変換し、整数座標を計算（テキスト配置用の中心点）
+    # DataFrame作成
     df = pd.DataFrame(records)
-    df['x_start'] = np.floor(df['x_min_raw']).astype(int)
-    df['y_start'] = np.floor(df['y_min_raw']).astype(int) 
-    df['x_end'] = np.ceil(df['x_max_raw']).astype(int)
-    df['y_end'] = np.ceil(df['y_max_raw']).astype(int)
-    
     df['normalize_code'] = df['教室コード'].apply(normalize_room_code)
     
-    # 元の生の座標列は削除
-    df = df.drop(columns=['x_min_raw', 'y_min_raw', 'x_max_raw', 'y_max_raw'])
-
+    print(f"-> {len(df)} 部屋の座標データを抽出しました。")
     return df
-
 
 # --- 4.5. 透かしレイヤー生成関数 ---
 def create_watermark_layer(width, height, text_to_draw, font, color, angle, spacing_text):

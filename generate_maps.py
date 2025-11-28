@@ -6,24 +6,27 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from rich import print
 import math
-# --- 変更箇所 1: ライブラリの追加 ---
+from datetime import datetime
+
 from svgpathtools import svg2paths # SVG解析ライブラリ
 import numpy as np # 数値計算用
+import re
 
 
 # --- 1. 定数とファイル名設定 ---
-OUTPUT_DIR = 'sfc_kappa_maps'
+OUTPUT_DIR = 'sfc_lectures_maps'
 
 # 描画設定
-FILL_COLOR = (83, 83, 83, 150)  # 教室の塗りつぶし色
-TEXT_COLOR = (0, 0, 0)         # 教室名の文字色 (黒)
-FONT_SIZE = 20                 # 教室名のフォントサイズ
+FILL_COLOR = (200, 200, 200, 80)   # 教室の塗りつぶし色
+TEXT_COLOR = (42, 72, 132)         # 教室名の文字色 (黒)
+FONT_SIZE = 21                 # 教室名のフォントサイズ
 
-CUSTOM_STRING = "Yokoyama Go" 
+CUSTOM_STRING = "横山 豪" 
 
-WATERMARK_FONT_SIZE = 16       # 透かしのフォントサイズ
-WATERMARK_ANGLE = -45          # 透かしの角度 (右肩上がり)
-WATERMARK_COLOR = (120, 120, 120, 80) # 透かしの色 (グレー, 31%の透明度)
+
+WATERMARK_COLOR = (120,120,120,100)
+WATERMARK_FONT_SIZE = 14       # 透かしのフォントサイズ
+WATERMARK_ANGLE = -35         # 透かしの角度 (右肩上がり)
 WATERMARK_SPACING_ZENKAKU = 15 # 透かし文字間のスペース（全角文字数）
 WATERMARK_LINE_SPACING = 6 # 透かし文字の縦のスペーシング
 
@@ -32,9 +35,6 @@ DAY_JP_TO_EN = {
     "月": "Mon", "火": "Tue", "水": "Wed", "木": "Thu", 
     "金": "Fri", "土": "Sat", "日": "Sun", "他": "etc"
 }
-
-
-import re
 
 def normalize_room_code(code):
 
@@ -52,8 +52,7 @@ def normalize_room_code(code):
         'ν': 'nu', 'ξ': 'xi', 'ο': 'omicron', 'π': 'pi',
         'ρ': 'rho', 'σ': 'sigma', 'τ': 'tau', 'υ': 'upsilon',
         'φ': 'phi', 'χ': 'chi', 'ψ': 'psi', 'ω': 'omega',
-        
-        # 大文字のギリシャ文字の追加
+
         'Α': 'alpha', 'Β': 'beta', 'Γ': 'gamma', 'Δ': 'delta',
         'Ε': 'epsilon', 'Ζ': 'zeta', 'Η': 'eta', 'Θ': 'theta',
         'Ι': 'iota', 'Κ': 'kappa', 'Λ': 'lambda', 'Μ': 'mu',
@@ -61,9 +60,7 @@ def normalize_room_code(code):
         'Ρ': 'rho', 'Σ': 'sigma', 'Τ': 'tau', 'Υ': 'upsilon',
         'Φ': 'phi', 'Χ': 'chi', 'Ψ': 'psi', 'Ω': 'omega'
     }
-    
-    # 最初に小文字化の処理があるので、これは少し冗長になりますが、
-    # 処理順序を変更せず元の構造を保つために、このマッピング拡張が最も安全です。
+   
     code = code.lower() 
                         
     for greek, latin in greek_to_latin.items():
@@ -72,11 +69,11 @@ def normalize_room_code(code):
     code = re.sub(r'[\s\-_]', '', code)
     
     return code
-# --- 2. 日本語フォント探索ロジック ---
+
 def find_japanese_font():
-    """
-    Windows環境で一般的に利用可能な日本語フォントを探してパスとインデックスを返す
-    """
+    
+ #  Windows環境で一般的に利用可能な日本語フォントを探してパスとインデックスを返す
+    
     if 'WINDIR' not in os.environ:
         return None, None
         
@@ -310,9 +307,14 @@ if __name__ == '__main__':
         exit()
     # --- 依存ライブラリの確認終わり ---
 
-
-    if not os.path.exists(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
+    # 日時フォルダーの作成
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_subdir = os.path.join(OUTPUT_DIR, timestamp)
+    
+    if not os.path.exists(output_subdir):
+        os.makedirs(output_subdir)
+    
+    print(f"出力先: {output_subdir}")
 
     # 5-1. ファイル選択
     print("ファイル選択ダイアログが表示されます。")
@@ -454,7 +456,7 @@ if __name__ == '__main__':
                 draw.text((text_x, text_y), text, fill=TEXT_COLOR, font=font)
 
             # 5. 画像の保存
-            output_filename = os.path.join(OUTPUT_DIR, f"map_{time_slot.replace('/', '_')}.png")
+            output_filename = os.path.join(output_subdir, f"map_{time_slot.replace('/', '_')}.png")
             # RGBAからRGBに変換して保存 (PNGだが透明度を統合)
             base_img.convert('RGB').save(output_filename)
             
@@ -466,4 +468,4 @@ if __name__ == '__main__':
             continue
 
     print("-" * 30)
-    print(f"処理が完了しました。生成されたマップは '{OUTPUT_DIR}' フォルダ内にあります。")
+    print(f"処理が完了しました。生成されたマップは '{output_subdir}' フォルダ内にあります。")

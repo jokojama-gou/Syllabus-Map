@@ -172,8 +172,8 @@ def select_file(title, filetypes):
 # SVG解析ロジック
 def extract_room_coordinates_from_svg(svg_file_path):
     """
-    SVGファイルからパス情報（教室コードと外接矩形座標）を抽出し、DataFrameとして返す。
-    GIMPで作成した円形・多角形の教室にも対応する。
+    SVGファイルからパス情報（教室コードとパス形状）を抽出し、DataFrameとして返す。
+    ベジェ曲線を含むパスをポリゴン座標に変換して保存する。
     """
     try:
         # svg2pathsでSVGを解析。pathsはPathオブジェクトのリスト、attributesは属性のリスト
@@ -192,18 +192,31 @@ def extract_room_coordinates_from_svg(svg_file_path):
         if not classroom_name or not classroom_name.strip():
             continue
 
-        # 外接矩形 (Bounding Box) を計算
-        # path.bbox()は (xmin, xmax, ymin, ymax) を返す
+        # パスをポリゴン座標に変換（ベジェ曲線を線分近似）
+        # サンプリング数を増やすことで滑らかな曲線を再現
         try:
-            xmin, xmax, ymin, ymax = path.bbox() 
+            # パスの長さに応じてサンプル数を決定（最小50、最大500）
+            path_length = path.length()
+            num_samples = max(50, min(500, int(path_length / 2)))
+            
+            # パスを均等にサンプリング
+            polygon_points = []
+            for i in range(num_samples + 1):
+                t = i / num_samples
+                point = path.point(t)
+                polygon_points.append((point.real, point.imag))
+            
+            # 外接矩形も計算（テキスト配置用）
+            xmin, xmax, ymin, ymax = path.bbox()
+            
         except Exception as e:
-            print(f"警告: パスID '{classroom_name}' の外接矩形計算中にエラーが発生しました: {e}。このパスはスキップされます。")
+            print(f"警告: パスID '{classroom_name}' の変換中にエラーが発生しました: {e}。このパスはスキップされます。")
             continue
 
-        # データを整数に丸める（ピクセル座標として利用するため）
+        # データを保存
         records.append({
             '教室コード': classroom_name,
-            # X/Yの最小値・最大値を保持（CSV形式に合わせる）
+            'polygon_points': polygon_points,  # ポリゴン座標リスト
             'x_min_raw': xmin,
             'y_min_raw': ymin, 
             'x_max_raw': xmax,
@@ -214,7 +227,7 @@ def extract_room_coordinates_from_svg(svg_file_path):
         print("致命的エラー: SVGファイルから有効な教室座標データ（ID付きパス）が見つかりませんでした。")
         return pd.DataFrame()
 
-    # DataFrameに変換し、整数座標を計算
+    # DataFrameに変換し、整数座標を計算（テキスト配置用の中心点）
     df = pd.DataFrame(records)
     df['x_start'] = np.floor(df['x_min_raw']).astype(int)
     df['y_start'] = np.floor(df['y_min_raw']).astype(int) 
@@ -435,14 +448,15 @@ if __name__ == '__main__':
             draw = ImageDraw.Draw(base_img)
             
             for _, row in merged_df.iterrows():
-                # 座標が既にx_start, y_start, x_end, y_endとして計算されている
-                x_start, y_start, x_end, y_end = row['x_start'], row['y_start'], row['x_end'], row['y_end']
+                # ポリゴン座標を取得（ベジェ曲線がそのまま保持されている）
+                polygon_points = row['polygon_points']
                 text = row['科目名']
                 
-                # 塗りつぶし
-                draw.rectangle((x_start, y_start, x_end, y_end), fill=FILL_COLOR)
+                # ポリゴンで塗りつぶし（ベジェ曲線の形状を保持）
+                draw.polygon(polygon_points, fill=FILL_COLOR)
                 
-                # テキスト描画 (中央配置)
+                # テキスト描画 (中央配置) - バウンディングボックスの中心を使用
+                x_start, y_start, x_end, y_end = row['x_start'], row['y_start'], row['x_end'], row['y_end']
                 center_x = (x_start + x_end) / 2
                 center_y = (y_start + y_end) / 2
                 

@@ -24,8 +24,8 @@ FONT_SIZE = 21                 # 教室名のフォントサイズ
 CUSTOM_STRING = "横山 豪" 
 
 
-WATERMARK_COLOR = (120,120,120,100)
-WATERMARK_FONT_SIZE = 14       # 透かしのフォントサイズ
+WATERMARK_COLOR = (120,120,120,90)
+WATERMARK_FONT_SIZE = 16       # 透かしのフォントサイズ
 WATERMARK_ANGLE = -35         # 透かしの角度 (右肩上がり)
 WATERMARK_SPACING_ZENKAKU = 15 # 透かし文字間のスペース（全角文字数）
 WATERMARK_LINE_SPACING = 6 # 透かし文字の縦のスペーシング

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>SFC Archival Index</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
+        h1 { border-bottom: 2px solid #ccc; padding-bottom: 10px; }
+        #image-list { list-style: none; padding: 0; }
+        #image-list li { margin-bottom: 10px; }
+        #image-list a { text-decoration: none; color: #0070f3; font-size: 1.1em; }
+        #image-list a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+
+    <h1>難読化資料 アーカイブ一覧 (全35件)</h1>
+    <ul id="image-list">
+        </ul>
+
+    <script type="module">
+        import { imageList } from './image_list.js'; // Pythonが生成したリストをインポート
+
+        const listElement = document.getElementById('image-list');
+
+        imageList.forEach(item => {
+            const li = document.createElement('li');
+            const link = document.createElement('a');
+            
+            // テンプレートページ (viewer.html) にIDを渡す
+            link.href = `viewer.html?id=${item.id}`; 
+            link.textContent = `資料 #${item.id}: ${item.file_name} (${item.width}x${item.height})`;
+            
+            li.appendChild(link);
+            listElement.appendChild(li);
+        });
+    </script>
+</body>
+</html>
